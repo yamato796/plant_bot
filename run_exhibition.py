@@ -1,69 +1,76 @@
 import argparse
 import time
+import pickle
 import numpy as np
-import tensorflow as tf
 import sounddevice as sd
-from train_model import get_wifi_features # 共用擷取邏輯
+from sklearn.preprocessing import StandardScaler
+from train_model import get_wifi_features
 
 # --- 參數解析 ---
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', type=str, default='home_model.keras', help='指定模型路徑')
+parser.add_argument('--model', type=str, default='home_model.pkl')
 args = parser.parse_args()
 
-# --- 展場動態校正 ---
-def calibrate_exhibition(duration=600):
-    print(f"啟動展場基準線校正 ({duration} 秒)... 請保持空間淨空。")
-    exhibition_data = []
-    start = time.time()
-    while time.time() - start < duration:
-        exhibition_data.append(get_wifi_features())
-        time.sleep(2)
-    
-    ex_mean = np.mean(exhibition_data, axis=0)
-    ex_std = np.std(exhibition_data, axis=0) + 1e-6
-    print("展場基準線建立完成。")
-    return ex_mean, ex_std
-
-# --- 音訊生成邏輯 ---
+# --- 音訊合成引擎 ---
 def generate_drone(error_score, duration=0.1, sr=44100):
-    """依據重建誤差生成聲音"""
     t = np.linspace(0, duration, int(sr * duration), False)
     
-    # 基礎頻率與誤差成正比 (例如 100Hz 到 600Hz)
     base_freq = 100 + (error_score * 500)
     wave1 = np.sin(2 * np.pi * base_freq * t)
     
-    # 誤差越大，加入越多失真與拍頻 (Beating)
     detune_freq = base_freq * (1 + (error_score * 0.05))
     wave2 = np.sin(2 * np.pi * detune_freq * t) * error_score
     
-    mixed = (wave1 + wave2) / 2.0
+    mixed = wave1 + wave2
+    
+    # 峰值正規化強制推動最大硬體增益
+    max_amp = np.max(np.abs(mixed))
+    if max_amp > 0: 
+        mixed /= max_amp
+        
     return np.float32(np.column_stack((mixed, mixed)))
 
 if __name__ == "__main__":
-    # 載入模型
-    model = tf.keras.models.load_model(args.model)
-    # 執行展場校正
-    ex_mean, ex_std = calibrate_exhibition(600)
+    # 強制指定音訊介面 (請確認 DAC ID 為 1)
+    sd.default.device = 1
     
-    print("系統進入即時推論模式。")
+    # 載入預訓練模型
+    with open(args.model, 'rb') as f:
+        payload = pickle.load(f)
+    model = payload['model']
+
+    # --- 展場基線校正 (Domain Adaptation) ---
+    print("啟動展場基準線靜默校正 (預估耗時 600 秒)...")
+    ex_data = []
+    for i in range(300):
+        ex_data.append(get_wifi_features())
+        time.sleep(2)
+        if (i + 1) % 30 == 0:
+            print(f"校正進度: {i + 1} / 300")
+            
+    # 實體化展場專用特徵轉換器
+    ex_scaler = StandardScaler()
+    ex_scaler.fit(ex_data)
+
+    print("校正完畢，進入實時推論迴圈。")
+    
     try:
         while True:
-            live_features = get_wifi_features()
-            # 使用展場基準正規化，套用家中模型的推論邏輯
-            x_live = (live_features - ex_mean) / ex_std
-            x_live = np.expand_dims(x_live, axis=0)
+            # 1. 資料擷取與展場特徵正規化
+            live_vector = np.array(get_wifi_features()).reshape(1, -1)
+            live_scaled = ex_scaler.transform(live_vector)
             
-            # 計算重建誤差 (Anomaly Score)
-            reconstruction = model.predict(x_live, verbose=0)
-            mse = np.mean(np.square(x_live - reconstruction))
+            # 2. 異常分數推論 (負值，越小代表越異常)
+            score = model.score_samples(live_scaled)[0]
             
-            # 將誤差截斷並映射至 0.0 ~ 1.0 作為聲音參數
-            error_score = np.clip(mse / 5.0, 0.0, 1.0) 
+            # 3. 分數正規化裁剪 (-0.4 為基準正常值，隨環境波動向負數遞減)
+            error_score = np.clip((-score - 0.4) / 0.4, 0.0, 1.0) 
             
-            audio = generate_drone(error_score)
-            sd.play(audio, 44100)
+            # 4. 合成音訊並阻塞播放
+            audio_buffer = generate_drone(error_score)
+            sd.play(audio_buffer, 44100)
             sd.wait()
             
     except KeyboardInterrupt:
+        print("\n中斷執行緒。")
         sd.stop()
