@@ -11,6 +11,8 @@ SAMPLE_RATE = 44100
 BUFFER_DURATION = 0.1
 SCAN_INTERVAL = 2.0  # 環境掃描頻率 (秒)
 
+sd.default.device = 1
+
 # 共享狀態與執行緒鎖
 active_nodes = {}
 state_lock = threading.Lock()

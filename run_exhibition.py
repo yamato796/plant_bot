@@ -54,11 +54,11 @@ if __name__ == "__main__":
     # --- 展場基線校正 (Domain Adaptation) ---
     print("啟動展場基準線靜默校正 (預估耗時 600 秒)...")
     ex_data = []
-    for i in range(300):
+    for i in range(5):
         ex_data.append(get_wifi_features())
         time.sleep(2)
-        if (i + 1) % 30 == 0:
-            print(f"校正進度: {i + 1} / 300")
+        if (i + 1) % 1 == 0:
+            print(f"校正進度: {i + 1} / 5")
             
     # 實體化展場專用特徵轉換器
     ex_scaler = StandardScaler()
@@ -79,7 +79,7 @@ if __name__ == "__main__":
             error_score = np.clip((-score - 0.4) / 0.4, 0.0, 1.0) 
             
             # 4. 合成音訊並阻塞播放
-            audio_buffer = generate_drone(error_score)
+            audio_buffer = generate_expanded_drone(error_score)
             sd.play(audio_buffer, 44100)
             sd.wait()
             

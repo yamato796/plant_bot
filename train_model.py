@@ -23,11 +23,11 @@ if __name__ == "__main__":
     data = []
     
     # 執行 300 次採樣，每次間隔 2 秒
-    for i in range(300):
+    for i in range(30):
         data.append(get_wifi_features())
         time.sleep(2)
-        if (i + 1) % 30 == 0:
-            print(f"進度: {i + 1} / 300")
+        if (i + 1) % 10 == 0:
+            print(f"進度: {i + 1} / 30 {time.time()}")
 
     X_train = np.array(data)
 
