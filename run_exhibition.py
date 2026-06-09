@@ -12,20 +12,32 @@ parser.add_argument('--model', type=str, default='home_model.pkl')
 args = parser.parse_args()
 
 # --- 音訊合成引擎 ---
-def generate_drone(error_score, duration=0.1, sr=44100):
+def generate_expanded_drone(error_score, duration=0.1, sr=44100):
+    """擴展響應範圍之音訊合成引擎"""
     t = np.linspace(0, duration, int(sr * duration), False)
     
-    base_freq = 100 + (error_score * 500)
-    wave1 = np.sin(2 * np.pi * base_freq * t)
+    # 1. 指數頻率映射 (50Hz ~ 1200Hz)
+    min_f, max_f = 50.0, 1200.0
+    base_freq = min_f * ((max_f / min_f) ** error_score)
     
-    detune_freq = base_freq * (1 + (error_score * 0.05))
+    # 2. 基礎波與動態失真
+    wave1 = np.sin(2 * np.pi * base_freq * t)
+    detune_freq = base_freq * (1 + (error_score * 0.08)) 
     wave2 = np.sin(2 * np.pi * detune_freq * t) * error_score
     
-    mixed = wave1 + wave2
+    # 3. 高頻泛音注入 (當 error_score > 0.5 時激發，頻率為基頻 3 倍)
+    harmonic_amp = np.clip((error_score - 0.5) * 2.0, 0.0, 1.0)
+    wave3 = np.sin(2 * np.pi * (base_freq * 3.0) * t) * harmonic_amp
     
-    # 峰值正規化強制推動最大硬體增益
+    # 4. LFO 脈衝調變 (速率隨分數提升：1Hz ~ 16Hz)
+    lfo_rate = 1.0 + (error_score * 15.0)
+    lfo = (np.sin(2 * np.pi * lfo_rate * t) + 1.0) / 2.0
+    
+    # 5. 陣列疊加與峰值正規化
+    mixed = (wave1 + wave2 + wave3) * lfo
+    
     max_amp = np.max(np.abs(mixed))
-    if max_amp > 0: 
+    if max_amp > 0:
         mixed /= max_amp
         
     return np.float32(np.column_stack((mixed, mixed)))
